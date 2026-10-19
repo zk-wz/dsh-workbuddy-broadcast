@@ -9,7 +9,7 @@
 
 ## 它解决什么问题
 
-`dsh-workbuddy-connect` 让 **DSH 自己**能用 WorkBuddy 的模型。但这个能力只属于 DSH。
+[`dsh-workbuddy-connect`](https://github.com/corrinehu/dsh-workbuddy-connect) 让 **DSH 自己**能用 WorkBuddy 的模型。但这个能力只属于 DSH。
 
 如果你同时用别的 Agent 工具——Codex、Claude Code、Cursor、或者自己写的脚本——它们没法共用这份模型额度。本插件把 WorkBuddy 的账号能力以标准 OpenAI 协议暴露出来，那些工具只要支持「自定义 OpenAI Base URL」，就能直接接入。
 
@@ -149,7 +149,7 @@ curl -H "Authorization: Bearer <key>" http://localhost:18731/v1/models
 |---|---|---|
 | **Windows** | ✅ 完整支持 | 可同时服务 Windows 本机与 WSL 内的工具 |
 | **macOS** | ✅ 支持 | 只监听本机地址；凭据解密走 Spotlight 发现 App |
-| **Linux / WSL** | ⚠️ 部分支持 | 只监听本机地址。若 WorkBuddy 的凭据是加密存储的（`$wbEncrypted`），则**无法解密**——上游 `dsh-workbuddy-connect` 在 Linux 上同样不支持。此时需要用未加密的凭据文件（`WORKBUDDY_AUTH_FILE`） |
+| **Linux / WSL** | ⚠️ 部分支持 | 只监听本机地址。若 WorkBuddy 的凭据是加密存储的（`$wbEncrypted`），则**无法解密**——上游 [`dsh-workbuddy-connect`](https://github.com/corrinehu/dsh-workbuddy-connect) 在 Linux 上同样不支持。此时需要用未加密的凭据文件（`WORKBUDDY_AUTH_FILE`） |
 
 **WSL 端点**（`http://<vEthernet 地址>:18731/v1`）只存在于 Windows 上。其他平台没有 vEthernet 网卡，插件会自动降级为只监听 `127.0.0.1`，设置页会说明原因。
 
@@ -157,7 +157,7 @@ curl -H "Authorization: Bearer <key>" http://localhost:18731/v1/models
 
 - **只支持流式（SSE）**，不支持非流式。
 - 只能服务**当前登录的那一个** WorkBuddy 账号。
-- 依赖上游 `dsh-workbuddy-connect` 的公开导出。若该插件发生不兼容改动，本插件需要同步更新。
+- 依赖上游 [`dsh-workbuddy-connect`](https://github.com/corrinehu/dsh-workbuddy-connect) 的公开导出。若该插件发生不兼容改动，本插件需要同步更新。
 - **没装 WSL 也能用**：Windows 上会自动降级为只监听本机地址，此时工具用 `http://localhost:18731/v1`。
 
 ## 免责声明
