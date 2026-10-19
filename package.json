@@ -1,0 +1,64 @@
+{
+  "name": "dsh-workbuddy-broadcast",
+  "version": "0.1.0",
+  "description": "把本机 WorkBuddy 账号发布为 OpenAI 兼容的 HTTP 服务，供 WSL 内的 Agent 工具复用其模型 — expose WorkBuddy desktop models as an OpenAI-compatible endpoint for tools running inside WSL.",
+  "keywords": [
+    "dsh-plugin",
+    "deepseek-harness",
+    "deepseek",
+    "workbuddy",
+    "openai-compatible",
+    "wsl",
+    "model-provider"
+  ],
+  "type": "module",
+  "main": "lib/index.js",
+  "exports": {
+    ".": "./lib/index.js",
+    "./client": "./lib/client.js",
+    "./locale/*.json": "./locale/*.json",
+    "./icon": "./icon.svg"
+  },
+  "files": [
+    "lib",
+    "locale/*.json",
+    "cordis.patch.yml",
+    "icon.svg",
+    "scripts",
+    "README.md",
+    "README.en.md",
+    "LICENSE",
+    "THIRD_PARTY_NOTICES.txt"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "immediately": true
+    }
+  },
+  "peerDependencies": {
+    "@deepseek-ai/schemastery": "^3.18.5",
+    "dsh-workbuddy-connect": ">=0.7.8"
+  },
+  "peerDependenciesMeta": {
+    "dsh-workbuddy-connect": {
+      "optional": true
+    }
+  },
+  "engines": {
+    "node": "^22.19.0 || >=24.0.0"
+  },
+  "author": "zk-wz <zk-wz@outlook.com>",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/zk-wz/dsh-workbuddy-broadcast.git"
+  },
+  "homepage": "https://github.com/zk-wz/dsh-workbuddy-broadcast#readme",
+  "bugs": {
+    "url": "https://github.com/zk-wz/dsh-workbuddy-broadcast/issues"
+  },
+  "license": "MIT"
+}

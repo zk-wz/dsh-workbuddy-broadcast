@@ -1,0 +1,44 @@
+dsh-workbuddy-broadcast
+Third-party notices
+===================
+
+This package does not bundle third-party source code. It is distributed under
+the MIT license (see LICENSE) and references the following third-party works
+at runtime.
+
+--------------------------------------------------------------------------------
+dsh-workbuddy-connect
+--------------------------------------------------------------------------------
+
+Used as an optional runtime peer. This plugin borrows its credential store,
+upstream client, request-body normalisation, and model catalog rather than
+reimplementing them; the package itself is not redistributed here.
+
+Homepage: https://github.com/corrinehu/dsh-workbuddy-connect
+License:  MIT
+
+If you install this plugin, you are responsible for complying with that
+project's license and with any terms that apply to the services it reaches.
+
+--------------------------------------------------------------------------------
+@deepseek-ai/schemastery
+--------------------------------------------------------------------------------
+
+Provided by the DeepSeek Harness runtime as a peer dependency. Used only to
+declare this plugin's configuration schema.
+
+License: see the DeepSeek Harness distribution
+
+--------------------------------------------------------------------------------
+WorkBuddy / CodeBuddy (Tencent)
+--------------------------------------------------------------------------------
+
+This plugin is an unofficial integration. It is not affiliated with, endorsed
+by, or supported by Tencent or the WorkBuddy product team.
+
+All model inference is performed by WorkBuddy, using the account already
+signed in on your machine. No WorkBuddy code, credentials, or assets are
+redistributed with this package.
+
+Your use of WorkBuddy and its models is governed by WorkBuddy's own terms of
+service. This plugin is intended for personal, same-machine use only.

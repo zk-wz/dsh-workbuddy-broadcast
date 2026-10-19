@@ -1,0 +1,19 @@
+# 忽略依赖与本地运行产物（源码包里不应出现）
+node_modules/
+package-lock.json
+pnpm-lock.yaml
+yarn.lock
+
+# 编辑器
+.vscode/
+.idea/
+*.swp
+
+# 系统
+.DS_Store
+Thumbs.db
+
+# 本地临时
+*.log
+*.tmp
+tmp/

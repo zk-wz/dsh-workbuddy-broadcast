@@ -1,0 +1,602 @@
+#!/usr/bin/env python3
+"""Bridge the Windows-side WorkBuddy broadcast endpoint into WSL localhost.
+
+The Windows plugin listens on the WSL vEthernet adapter's IPv4 address, which
+Windows' virtual networking assigns and may change. WSL tools cannot reach a
+Windows listener through `127.0.0.1`, and they should not have to know that
+address. This bridge:
+
+  1. resolves the current Windows host address from the default route,
+  2. listens on `127.0.0.1:<local-port>` inside WSL,
+  3. forwards each connection to `<gateway>:<remote-port>`.
+
+It speaks no HTTP: it forwards bytes, so every endpoint the Windows side grows
+works here without a change.
+
+`start` detaches into the background (double fork + setsid, standard library
+only - no systemd unit, no init integration). `stop`, `port` and `log` talk to
+the running process through a small control socket, so they work from any
+terminal.
+
+Nothing is written outside the runtime directory: no log file, no config file.
+Logs live in an in-memory ring buffer, readable with `log`.
+
+Commands:
+  start            start the bridge in the background
+  stop             stop the running bridge
+  restart          stop then start
+  status           show whether it runs and where it points
+  port [N]         show the current port, or switch to N while running
+  log              print recent log lines from the running process
+  help, -h, --help show this text
+"""
+
+from __future__ import annotations
+
+import asyncio
+import errno
+import json
+import os
+import signal
+import socket
+import sys
+import time
+from collections import deque
+from pathlib import Path
+
+# --- Defaults (mirror the Windows plugin's defaults) ---------------------
+DEFAULT_PORT = 18731
+DEFAULT_BIND = "127.0.0.1"
+
+# Forward as fast as the socket allows.
+BUFFER_SIZE = 65536
+
+# How long `stop` waits for a graceful exit before escalating.
+STOP_GRACE_S = 5.0
+
+# Recent log lines kept in memory for `log`; nothing is written to disk.
+LOG_LINES = 200
+
+
+def runtime_dir() -> Path:
+    """Directory for the pid file, port file and control socket.
+
+    `XDG_RUNTIME_DIR` is a tmpfs, so this leaves no trace after a reboot and
+    never pollutes the home directory.
+    """
+    base = os.environ.get("XDG_RUNTIME_DIR")
+    root = Path(base) if base else Path("/tmp")
+    return root / f"wb-bridge-{os.getuid()}"
+
+
+def pid_path() -> Path:
+    """Path of the pid file."""
+    return runtime_dir() / "bridge.pid"
+
+
+def port_path() -> Path:
+    """Path of the file holding the live local port."""
+    return runtime_dir() / "bridge.port"
+
+
+def control_path() -> Path:
+    """Path of the control socket used by `stop`, `port` and `log`."""
+    return runtime_dir() / "control.sock"
+
+
+# --- Helpers -------------------------------------------------------------
+
+
+def log(message: str) -> None:
+    """Write one line to stdout without buffering surprises."""
+    print(message, flush=True)
+
+
+def resolve_gateway() -> str | None:
+    """Return the Windows host address as seen from inside WSL.
+
+    In NAT mode the default route's next hop is the Windows vEthernet adapter
+    address. Reading the route per connection keeps this correct when Windows
+    renumbers the virtual network while the bridge is running.
+    """
+    try:
+        with open("/proc/net/route", "r", encoding="utf-8") as handle:
+            for line in handle.readlines()[1:]:
+                fields = line.split()
+                if len(fields) < 3:
+                    continue
+                iface, destination, gateway = fields[0], fields[1], fields[2]
+                # The default route prints as eight zero hex digits.
+                if destination != "00000000" or iface == "lo":
+                    continue
+                octets = [int(gateway[i : i + 2], 16) for i in range(0, 8, 2)]
+                return ".".join(str(part) for part in reversed(octets))
+    except OSError:
+        return None
+    return None
+
+
+def pid_alive(pid: int) -> bool:
+    """Whether a process with this pid exists and is not a zombie."""
+    try:
+        os.kill(pid, 0)
+    except OSError as error:
+        if error.errno == errno.ESRCH:
+            return False
+        return error.errno == errno.EPERM
+    try:
+        with open(f"/proc/{pid}/stat", "r", encoding="utf-8") as handle:
+            state = handle.read().split(") ", 1)[1].split()[0]
+        return state != "Z"
+    except (OSError, IndexError):
+        return False
+
+
+def read_pid() -> int | None:
+    """Return the recorded, still-running pid, or None."""
+    try:
+        text = pid_path().read_text(encoding="utf-8").strip()
+    except OSError:
+        return None
+    if not text:
+        return None
+    try:
+        pid = int(text)
+    except ValueError:
+        return None
+    return pid if pid_alive(pid) else None
+
+
+def read_live_port() -> int | None:
+    """The port the running bridge listens on."""
+    try:
+        return int(port_path().read_text(encoding="utf-8").strip())
+    except (OSError, ValueError):
+        return None
+
+
+def valid_port(value: object) -> int | None:
+    """Parse a port number, returning None when it is not usable."""
+    try:
+        port = int(str(value).strip())
+    except (TypeError, ValueError):
+        return None
+    return port if 1 <= port <= 65535 else None
+
+
+# --- Control protocol ----------------------------------------------------
+# One line of JSON over a UNIX socket. Deliberately tiny.
+
+
+def send_control(payload: dict, timeout: float = 5.0) -> dict | None:
+    """Send one control command to the running bridge."""
+    path = control_path()
+    if not path.exists():
+        return None
+    client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    client.settimeout(timeout)
+    try:
+        client.connect(str(path))
+        client.sendall((json.dumps(payload) + "\n").encode("utf-8"))
+        buffer = b""
+        while b"\n" not in buffer:
+            chunk = client.recv(4096)
+            if not chunk:
+                break
+            buffer += chunk
+        if not buffer:
+            return None
+        return json.loads(buffer.split(b"\n", 1)[0].decode("utf-8"))
+    except (OSError, ValueError):
+        return None
+    finally:
+        client.close()
+
+
+# --- The bridge ----------------------------------------------------------
+
+
+class Bridge:
+    """One listener plus its control socket and in-memory log."""
+
+    def __init__(self, port: int, bind: str, remote_port: int, echo: bool) -> None:
+        self.port = port
+        self.bind = bind
+        self.remote_port = remote_port
+        self.echo = echo
+        self.lines: deque[str] = deque(maxlen=LOG_LINES)
+        self.server: asyncio.AbstractServer | None = None
+        self.control: asyncio.AbstractServer | None = None
+        self.stopping = False
+
+    def say(self, message: str) -> None:
+        """Record one log line, echoing it only in the foreground."""
+        self.lines.append(message)
+        if self.echo:
+            print(message, flush=True)
+
+    async def pump(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+        """Copy one direction and half-close the peer when the source ends."""
+        try:
+            while True:
+                chunk = await reader.read(BUFFER_SIZE)
+                if not chunk:
+                    break
+                writer.write(chunk)
+                await writer.drain()
+        except (ConnectionResetError, BrokenPipeError, asyncio.CancelledError):
+            pass
+        finally:
+            try:
+                if writer.can_write_eof():
+                    writer.write_eof()
+            except (OSError, RuntimeError):
+                pass
+
+    async def handle(self, client_reader, client_writer) -> None:
+        """Forward one accepted connection to the current gateway."""
+        gateway = resolve_gateway()
+        if gateway is None:
+            client_writer.close()
+            return
+        try:
+            remote_reader, remote_writer = await asyncio.wait_for(
+                asyncio.open_connection(gateway, self.remote_port), timeout=5.0
+            )
+        except (OSError, asyncio.TimeoutError) as error:
+            self.say(f"connect {gateway}:{self.remote_port} failed: {error}")
+            client_writer.close()
+            return
+        try:
+            await asyncio.gather(
+                self.pump(client_reader, remote_writer),
+                self.pump(remote_reader, client_writer),
+            )
+        finally:
+            for writer in (remote_writer, client_writer):
+                try:
+                    writer.close()
+                except OSError:
+                    pass
+
+    async def listen(self, port: int) -> None:
+        """Bind the data listener, replacing any current one."""
+        if self.server is not None:
+            self.server.close()
+            await self.server.wait_closed()
+        self.server = await asyncio.start_server(self.handle, host=self.bind, port=port)
+        self.port = port
+        # The Windows side listens on the same number, so the forward target
+        # follows the local port; otherwise a changed port would forward into
+        # a port nothing is bound to.
+        self.remote_port = port
+        port_path().write_text(str(port), encoding="utf-8")
+        gateway = resolve_gateway() or "?"
+        self.say(f"listening on {self.bind}:{port} -> {gateway}:{self.remote_port}")
+
+    async def control_handle(self, reader, writer) -> None:
+        """Serve one control command."""
+        try:
+            line = await reader.readline()
+            request = json.loads(line.decode("utf-8") or "{}")
+        except (ValueError, OSError):
+            writer.close()
+            return
+        command = request.get("command")
+        if command == "stop":
+            writer.write((json.dumps({"ok": True}) + "\n").encode("utf-8"))
+            await writer.drain()
+            writer.close()
+            self.stopping = True
+            return
+        if command == "port":
+            new_port = valid_port(request.get("port"))
+            if new_port is None:
+                reply = {"ok": False, "error": "port must be an integer from 1 to 65535"}
+            else:
+                try:
+                    await self.listen(new_port)
+                    reply = {"ok": True, "port": new_port}
+                except OSError as error:
+                    message = (
+                        f"port {new_port} is already in use"
+                        if error.errno == errno.EADDRINUSE
+                        else str(error)
+                    )
+                    reply = {"ok": False, "error": message}
+            writer.write((json.dumps(reply) + "\n").encode("utf-8"))
+            await writer.drain()
+            writer.close()
+            return
+        if command == "log":
+            payload = {"ok": True, "lines": list(self.lines)}
+            writer.write((json.dumps(payload) + "\n").encode("utf-8"))
+            await writer.drain()
+            writer.close()
+            return
+        writer.write((json.dumps({"ok": False, "error": "unknown command"}) + "\n").encode("utf-8"))
+        await writer.drain()
+        writer.close()
+
+    async def run(self) -> None:
+        """Run until stopped."""
+        await self.listen(self.port)
+
+        control = control_path()
+        try:
+            control.unlink()
+        except OSError:
+            pass
+        self.control = await asyncio.start_unix_server(self.control_handle, path=str(control))
+
+        async def watch_gateway() -> None:
+            seen = resolve_gateway() or "?"
+            while not self.stopping:
+                await asyncio.sleep(15)
+                current = resolve_gateway() or "?"
+                if current != seen:
+                    self.say(f"gateway changed: {seen} -> {current}")
+                    seen = current
+
+        watcher = asyncio.create_task(watch_gateway())
+        try:
+            while not self.stopping:
+                await asyncio.sleep(0.2)
+        finally:
+            watcher.cancel()
+            if self.server is not None:
+                self.server.close()
+                await self.server.wait_closed()
+            if self.control is not None:
+                self.control.close()
+                await self.control.wait_closed()
+            for path in (control, pid_path(), port_path()):
+                try:
+                    path.unlink()
+                except OSError:
+                    pass
+            self.say("stopped")
+
+
+def run_bridge(port: int, bind: str, remote_port: int, echo: bool) -> int:
+    """Create the bridge and run it until stopped."""
+    bridge = Bridge(port, bind, remote_port, echo)
+    runtime_dir().mkdir(parents=True, exist_ok=True)
+
+    def on_term(_signum, _frame):
+        bridge.stopping = True
+
+    signal.signal(signal.SIGTERM, on_term)
+    signal.signal(signal.SIGINT, on_term)
+
+    try:
+        asyncio.run(bridge.run())
+    except OSError as error:
+        if error.errno == errno.EADDRINUSE:
+            log(f"port {port} is already in use")
+        else:
+            log(f"failed to start: {error}")
+        return 1
+    except KeyboardInterrupt:
+        pass
+    return 0
+
+
+def daemonize(port: int, bind: str, remote_port: int) -> int:
+    """Detach into the background with a double fork.
+
+    Standard library only: fork, setsid, fork again, then point the standard
+    streams at /dev/null. No systemd unit and no init integration, so nothing
+    survives a reboot and nothing is registered with the system.
+    """
+    runtime_dir().mkdir(parents=True, exist_ok=True)
+
+    first = os.fork()
+    if first > 0:
+        # Parent: wait until the child records its pid, then return so the
+        # shell prompt comes back.
+        for _ in range(50):
+            if read_pid() is not None:
+                live = read_live_port()
+                log(f"started (pid {read_pid()}) on port {live if live is not None else port}")
+                return 0
+            time.sleep(0.1)
+        log("failed to start: the bridge did not come up")
+        return 1
+
+    # First child: become a session leader so the terminal can close.
+    os.setsid()
+    second = os.fork()
+    if second > 0:
+        os._exit(0)
+
+    # Grandchild: the actual daemon.
+    devnull = os.open(os.devnull, os.O_RDWR)
+    os.dup2(devnull, 0)
+    os.dup2(devnull, 1)
+    os.dup2(devnull, 2)
+    if devnull > 2:
+        os.close(devnull)
+
+    pid_path().write_text(str(os.getpid()), encoding="utf-8")
+    try:
+        code = run_bridge(port, bind, remote_port, echo=False)
+    except BaseException:
+        code = 1
+    os._exit(code)
+
+
+# --- Commands ------------------------------------------------------------
+
+
+def parse_port_argument(argv: list[str]) -> tuple[int | None, int | None]:
+    """Read `--port N` / `--port=N` / `-p N` from a start-like argv.
+
+    @returns (port, error status): port is None when unset or invalid.
+    """
+    port = None
+    error = None
+    for index, token in enumerate(argv):
+        value = None
+        if token in ("--port", "-p") and index + 1 < len(argv):
+            value = argv[index + 1]
+        elif token.startswith("--port="):
+            value = token.split("=", 1)[1]
+        if value is None:
+            continue
+        parsed = valid_port(value)
+        if parsed is None:
+            error = 2
+        else:
+            port = parsed
+    return port, error
+
+
+def cmd_start(argv: list[str]) -> int:
+    """Start the bridge in the background."""
+    port, error = parse_port_argument(argv)
+    if error is not None:
+        log("invalid port; expected an integer from 1 to 65535")
+        return error
+    target = port if port is not None else DEFAULT_PORT
+
+    existing = read_pid()
+    if existing is not None:
+        log(f"already running (pid {existing}) on port {read_live_port() or '?'}")
+        return 0
+    if resolve_gateway() is None:
+        log("cannot find the default route; is WSL networking up?")
+        return 1
+    return daemonize(target, DEFAULT_BIND, target)
+
+
+def cmd_stop(_argv: list[str]) -> int:
+    """Stop the running bridge."""
+    pid = read_pid()
+    if pid is None:
+        log("not running")
+        cleanup_runtime()
+        return 0
+    reply = send_control({"command": "stop"})
+    if reply is None:
+        # Control socket unavailable: fall back to a signal.
+        try:
+            os.kill(pid, signal.SIGTERM)
+        except OSError as error:
+            log(f"could not stop pid {pid}: {error}")
+            cleanup_runtime()
+            return 1
+    for _ in range(int(STOP_GRACE_S * 10)):
+        if not pid_alive(pid):
+            break
+        time.sleep(0.1)
+    if pid_alive(pid):
+        try:
+            os.kill(pid, signal.SIGKILL)
+        except OSError:
+            pass
+    cleanup_runtime()
+    log(f"stopped (pid {pid})")
+    return 0
+
+
+def cmd_restart(argv: list[str]) -> int:
+    """Stop then start."""
+    cmd_stop(argv)
+    return cmd_start(argv)
+
+
+def cmd_status(_argv: list[str]) -> int:
+    """Report whether the bridge runs and where it points."""
+    pid = read_pid()
+    gateway = resolve_gateway()
+    if pid is None:
+        log("wb-bridge: stopped")
+        log(f"windows gateway: {gateway or 'unknown'}")
+        return 3
+    port = read_live_port()
+    shown = port if port is not None else "?"
+    log(f"wb-bridge: running (pid {pid})")
+    log(f"local:   {DEFAULT_BIND}:{shown}")
+    log(f"remote:  {gateway or 'unknown'}:{shown}")
+    return 0
+
+
+def cmd_port(argv: list[str]) -> int:
+    """Show or change the listening port, live when the bridge is running."""
+    if not argv:
+        port = read_live_port()
+        log(str(port) if port is not None else str(DEFAULT_PORT))
+        return 0
+    new_port = valid_port(argv[0])
+    if new_port is None:
+        log(f"invalid port: {argv[0]}")
+        return 2
+    if read_pid() is None:
+        log(f"not running; the next `start` uses {new_port}")
+        return 0
+    reply = send_control({"command": "port", "port": new_port})
+    if reply is None:
+        log("could not reach the running bridge")
+        return 1
+    if not reply.get("ok"):
+        log(f"failed: {reply.get('error', 'unknown error')}")
+        return 1
+    log(f"port changed to {reply.get('port')}")
+    return 0
+
+
+def cmd_log(_argv: list[str]) -> int:
+    """Print the running bridge's recent log lines."""
+    if read_pid() is None:
+        log("not running")
+        return 3
+    reply = send_control({"command": "log"})
+    if reply is None or not reply.get("ok"):
+        log("could not reach the running bridge")
+        return 1
+    for line in reply.get("lines", []):
+        log(line)
+    return 0
+
+
+def cleanup_runtime() -> None:
+    """Remove leftover runtime files after the process is gone."""
+    for path in (pid_path(), port_path(), control_path()):
+        try:
+            path.unlink()
+        except OSError:
+            pass
+
+
+def cmd_help(_argv: list[str]) -> int:
+    """Print the module docstring."""
+    log(__doc__.strip())
+    return 0
+
+
+COMMANDS = {
+    "start": cmd_start,
+    "stop": cmd_stop,
+    "restart": cmd_restart,
+    "status": cmd_status,
+    "port": cmd_port,
+    "log": cmd_log,
+    "help": cmd_help,
+}
+
+
+def main(argv: list[str]) -> int:
+    """Dispatch one subcommand; no arguments prints help."""
+    if not argv or argv[0] in ("-h", "--help"):
+        return cmd_help([])
+    handler = COMMANDS.get(argv[0])
+    if handler is None:
+        log(f"unknown command: {argv[0]}")
+        log("try: wb-bridge help")
+        return 2
+    return handler(argv[1:])
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

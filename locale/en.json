@@ -1,0 +1,28 @@
+{
+  "meta": {
+    "title": "WorkBuddy Broadcast",
+    "description": "Publishes the local WorkBuddy account as an OpenAI-compatible HTTP endpoint on the WSL vEthernet interface."
+  },
+  "section": {
+    "title": "WorkBuddy Broadcast",
+    "description": "An OpenAI-compatible endpoint for agent tools running inside WSL."
+  },
+  "status": {
+    "listening": "Listening",
+    "starting": "Starting",
+    "noCredential": "Not signed in",
+    "error": "Failed",
+    "noVeth": "No WSL vEthernet adapter"
+  },
+  "field": {
+    "endpoint": "Endpoint",
+    "apiKey": "API key",
+    "port": "Port",
+    "models": "Models",
+    "veth": "vEthernet address"
+  },
+  "hint": {
+    "wsl": "From WSL, run wb-bridge start, then point tools at http://127.0.0.1:18731/v1",
+    "portChanged": "Change port in cordis.patch.yml, then restart the plugin."
+  }
+}

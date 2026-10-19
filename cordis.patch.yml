@@ -1,0 +1,10 @@
+# Inserts the broadcast listener into this profile's plugin tree.
+#
+# No `config` is set here on purpose. Every field has a default in the plugin's
+# own schema (`port` 18731, `apiKey` generated, `allowLocal` true), and the
+# settings page writes whatever the user chooses into the *profile* patch
+# layer, which is applied after this one. Writing defaults here would win over
+# a user's earlier choice for anyone who installs a later version.
+- insert:
+    - id: llm-workbuddy-broadcast
+      name: dsh-workbuddy-broadcast
