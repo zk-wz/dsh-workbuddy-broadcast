@@ -72,12 +72,15 @@ Model    : deepseek-v4.1-flash
 
 WSL 无法通过 `127.0.0.1` 访问 Windows 上的监听端口（NAT 模式下 `127.0.0.1` 指向 WSL 自己），而 Windows 的 vEthernet 地址会变化，因此需要一个转发脚本。
 
-把仓库里的 [`scripts/wb-bridge`](./scripts/wb-bridge) 复制到 WSL：
+> **脚本不在 npm 包里。** 它只对 Windows + WSL 有用，其他平台用不到，因此单独放在仓库中，避免让所有安装都背上这个体积。请从
+> [`scripts/wb-bridge`](https://github.com/zk-wz/dsh-workbuddy-broadcast/blob/main/scripts/wb-bridge)
+> 下载（页面右上角 Raw），或在 WSL 里直接取：
 
 ```sh
 # 在 WSL 内
 mkdir -p ~/scripts ~/.local/bin
-cp wb-bridge ~/scripts/wb-bridge
+curl -fsSL https://raw.githubusercontent.com/zk-wz/dsh-workbuddy-broadcast/main/scripts/wb-bridge \
+  -o ~/scripts/wb-bridge
 chmod 755 ~/scripts/wb-bridge
 ln -sfn ~/scripts/wb-bridge ~/.local/bin/wb-bridge
 ```

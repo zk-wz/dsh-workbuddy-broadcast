@@ -69,12 +69,17 @@ Model    : deepseek-v4.1-flash
 
 WSL cannot reach a Windows listener through `127.0.0.1` (in NAT mode that address is WSL itself), and Windows' vEthernet address changes, so a forwarding script is needed.
 
-Copy [`scripts/wb-bridge`](./scripts/wb-bridge) into WSL:
+> **The script is not in the npm package.** It is only useful on Windows + WSL,
+> so it lives in the repository instead of inflating every install. Download it
+> from
+> [`scripts/wb-bridge`](https://github.com/zk-wz/dsh-workbuddy-broadcast/blob/main/scripts/wb-bridge)
+> (Raw), or fetch it directly inside WSL:
 
 ```sh
 # inside WSL
 mkdir -p ~/scripts ~/.local/bin
-cp wb-bridge ~/scripts/wb-bridge
+curl -fsSL https://raw.githubusercontent.com/zk-wz/dsh-workbuddy-broadcast/main/scripts/wb-bridge \
+  -o ~/scripts/wb-bridge
 chmod 755 ~/scripts/wb-bridge
 ln -sfn ~/scripts/wb-bridge ~/.local/bin/wb-bridge
 ```
