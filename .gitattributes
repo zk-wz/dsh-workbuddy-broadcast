@@ -1,0 +1,15 @@
+# Normalize line endings in the repository.
+#
+# Windows' default `core.autocrlf=true` would otherwise commit these files
+# with CRLF, which breaks the shell script below on Linux (`bad interpreter`)
+# and makes diffs churn between platforms.
+* text=auto eol=lf
+
+# A script that must run on Linux exactly as committed.
+scripts/wb-bridge text eol=lf
+
+# Binary assets keep their bytes.
+*.png binary
+*.jpg binary
+*.webp binary
+*.ico binary

@@ -2,7 +2,7 @@
 
 English | [中文](./README.md)
 
-Publish the WorkBuddy account already signed in on this machine as an **OpenAI-compatible HTTP service**, so other agent tools on the same machine — inside WSL or on Windows — can reuse its models.
+Publish the WorkBuddy account already signed in on this machine as an **OpenAI-compatible HTTP service**, so other agent tools on the same machine — on Windows, inside WSL, or on macOS and Linux — can reuse its models.
 
 ## What it solves
 
@@ -142,7 +142,17 @@ A few models (such as `glm-5.1`) **require** `reasoning_effort` to be sent expli
 - **Streaming (SSE) only**; non-streaming requests are not supported.
 - Serves **only the currently signed-in** WorkBuddy account.
 - Depends on the public exports of `dsh-workbuddy-connect`; an incompatible change there requires an update here.
-- Windows only. **WSL is optional**: without it the plugin degrades to a loopback-only listener and the settings page says no WSL adapter was found. Tools on Windows then use `http://localhost:18731/v1`.
+- **WSL is optional**: without it the plugin degrades to a loopback-only listener. On Windows, tools then use `http://localhost:18731/v1`.
+
+## Platform support
+
+| Platform | Status | Notes |
+|---|---|---|
+| **Windows** | ✅ Full | Serves both Windows-side tools and WSL tools |
+| **macOS** | ✅ Supported | Loopback only; credential decryption finds the app through Spotlight |
+| **Linux / WSL** | ⚠️ Partial | Loopback only. If WorkBuddy stores its credential encrypted (`$wbEncrypted`), it **cannot be decrypted** — upstream `dsh-workbuddy-connect` has the same limitation on Linux. Use an unencrypted credential file (`WORKBUDDY_AUTH_FILE`) instead |
+
+The **WSL endpoint** (`http://<vEthernet address>:18731/v1`) exists only on Windows. Other platforms have no vEthernet adapter, so the plugin falls back to `127.0.0.1` and says so on its settings page.
 
 ## Disclaimer
 

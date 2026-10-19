@@ -5,7 +5,7 @@
 [![npm](https://img.shields.io/npm/v/dsh-workbuddy-broadcast.svg)](https://www.npmjs.com/package/dsh-workbuddy-broadcast)
 [![license](https://img.shields.io/npm/l/dsh-workbuddy-broadcast.svg)](./LICENSE)
 
-把本机已登录的 WorkBuddy 账号发布为一个 **OpenAI 兼容的 HTTP 服务**，供同一台机器上的其他 Agent 工具（WSL 内的、Windows 上的）复用它的模型。
+把本机已登录的 WorkBuddy 账号发布为一个 **OpenAI 兼容的 HTTP 服务**，供同一台机器上的其他 Agent 工具复用它的模型——Windows 上的、WSL 里的、macOS 与 Linux 上的都可以。
 
 ## 它解决什么问题
 
@@ -140,12 +140,22 @@ curl -H "Authorization: Bearer <key>" http://localhost:18731/v1/models
 - 想关闭本机监听，把 `allowLocal` 设为 `false`。
 - 本插件读取的是 WorkBuddy App 自身的登录态，**不修改、不复制**它的凭据文件。凭据解密用的密钥只在内存中存在。
 
+## 平台支持
+
+| 平台 | 状态 | 说明 |
+|---|---|---|
+| **Windows** | ✅ 完整支持 | 可同时服务 Windows 本机与 WSL 内的工具 |
+| **macOS** | ✅ 支持 | 只监听本机地址；凭据解密走 Spotlight 发现 App |
+| **Linux / WSL** | ⚠️ 部分支持 | 只监听本机地址。若 WorkBuddy 的凭据是加密存储的（`$wbEncrypted`），则**无法解密**——上游 `dsh-workbuddy-connect` 在 Linux 上同样不支持。此时需要用未加密的凭据文件（`WORKBUDDY_AUTH_FILE`） |
+
+**WSL 端点**（`http://<vEthernet 地址>:18731/v1`）只存在于 Windows 上。其他平台没有 vEthernet 网卡，插件会自动降级为只监听 `127.0.0.1`，设置页会说明原因。
+
 ## 限制
 
 - **只支持流式（SSE）**，不支持非流式。
 - 只能服务**当前登录的那一个** WorkBuddy 账号。
 - 依赖上游 `dsh-workbuddy-connect` 的公开导出。若该插件发生不兼容改动，本插件需要同步更新。
-- 仅支持 Windows。**没装 WSL 也能用**：插件会自动降级为只监听本机地址，设置页会说明未检测到 WSL 网卡。此时 Windows 上的工具用 `http://localhost:18731/v1` 即可。
+- **没装 WSL 也能用**：Windows 上会自动降级为只监听本机地址，此时工具用 `http://localhost:18731/v1`。
 
 ## 免责声明
 
